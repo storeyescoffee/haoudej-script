@@ -138,32 +138,33 @@ def business_date_for_schedule(sched_hour: int) -> str:
 # ---------------------------------------------------------------------------
 SALES_SQL = """\
 SELECT
-    a.article_id                                       AS ART_ID,
-    m.date_creation                                    AS VTE_DATE_HEURE,
-    TIME(m.date_creation)                              AS VTE_HEURE,
-    a.libelle                                          AS ART_LIBELLE,
-    a.quantite                                         AS VTE_QUANTITE,
-    ROUND(a.mtt_total / NULLIF(a.quantite, 0), 2)      AS VTE_PRIX_DE_VENTE,
-    ROUND(a.mtt_total, 2)                              AS TOTAL_TTC,
-    ROUND(a.mtt_total / (1 + {tva}/100), 2)            AS TOTAL_HT,
+    a.article_id                                           AS ART_ID,
+    m.{date_col}                                           AS VTE_DATE_HEURE,
+    TIME(m.{date_col})                                     AS VTE_HEURE,
+    a.libelle                                              AS ART_LIBELLE,
+    a.quantite                                             AS VTE_QUANTITE,
+    ROUND(a.mtt_total / NULLIF(a.quantite, 0), 2)          AS VTE_PRIX_DE_VENTE,
+    ROUND(a.mtt_total, 2)                                  AS TOTAL_TTC,
+    ROUND(a.mtt_total / (1 + {tva}/100), 2)                AS TOTAL_HT,
     ROUND(a.mtt_total - a.mtt_total / (1 + {tva}/100), 2) AS TOTAL_TVA,
-    a.idx_element                                      AS VTE_ORDRE,
-    u.login                                            AS USR_NOM
+    m.id                                                   AS VTE_ORDRE,
+    u.login                                                AS USR_NOM
 FROM caisse_mouvement m
 JOIN caisse_mouvement_article a ON a.mvm_caisse_id = m.id
 LEFT JOIN `user` u ON u.id = m.user_id
-WHERE DATE(m.date_creation) = %s
+WHERE DATE(m.{date_col}) = '{date}'
   AND (m.is_annule IS NULL OR m.is_annule = 0)
   AND (a.is_annule IS NULL OR a.is_annule = 0)
   AND a.mtt_total <> 0
-ORDER BY m.date_creation, m.id, a.idx_element
+ORDER BY m.{date_col}, m.id, a.idx_element
 """
 
 def run_mysql_export(cfg: ConfigParser, target_date: str) -> int:
     """Run the sales query for target_date and write results.csv.
     Returns the number of data rows, or raises on failure."""
     m = cfg["mysql"]
-    tva = cfg.get("query", "tva", fallback="10")
+    tva      = cfg.get("query", "tva",      fallback="10")
+    date_col = cfg.get("query", "date_col", fallback="date_creation")
     out_path = Path(cfg.get("query", "output", fallback=str(DATA_DIR / "results.csv")))
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -178,8 +179,8 @@ def run_mysql_export(cfg: ConfigParser, target_date: str) -> int:
     )
     try:
         cur = conn.cursor()
-        sql = SALES_SQL.format(tva=tva)
-        cur.execute(sql, (target_date,))
+        sql = SALES_SQL.format(tva=tva, date_col=date_col, date=target_date)
+        cur.execute(sql)
         columns = [d[0] for d in cur.description]
         rows = cur.fetchall()
         cur.close()

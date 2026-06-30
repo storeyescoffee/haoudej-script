@@ -1,0 +1,16 @@
+[Unit]
+Description=HaoudejProgram — daily MySQL sales export and upload
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=haoudej
+ExecStart=/usr/bin/python3 /opt/haoudej/haoudej.py --config /opt/haoudej/config.conf
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

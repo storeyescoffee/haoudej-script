@@ -1,0 +1,48 @@
+; Copy this file to config.conf and fill in the values for the site.
+;   cp config.conf.example config.conf
+; config.conf holds credentials — keep it out of git (chmod 600).
+;
+; Or just run `sudo python3 main.py --configure`, which prompts for the database
+; credentials and the schedule, writes them here, and installs /etc/cron.d/caisse.
+;
+; Scheduling lives in cron, not here — see /etc/cron.d/caisse.
+
+[mysql]
+host = 127.0.0.1
+port = 3306
+user = root
+password = CHANGE_ME
+; Name of the cash-register database. The script exits 1 until this is set.
+database = CHANGE_ME
+; Optional MAC-address fallback for when the till is on DHCP and `host` goes stale.
+; If the host above refuses the connection, the MAC is looked up in the ARP cache,
+; then via `sudo arp-scan --localnet`, then via a ping sweep, and the resulting IP
+; is used instead. For the arp-scan step:  sudo apt install arp-scan
+; (arp-scan needs root; the cron job runs as root, so nothing extra is needed.
+;  Running it by hand as a normal user will prompt for a sudo password.)
+; Only works on the same subnet as the Pi — a MAC does not cross a router.
+; Test it with: python3 main.py --resolve-mac
+; mac = 30:0e:d5:34:70:2e
+mac =
+; MySQL TCP connect timeout, seconds.
+connect_timeout = 10
+
+[query]
+; VAT rate (%) used to split TOTAL_TTC into TOTAL_HT / TOTAL_TVA.
+tva = 10
+; Column used for date filtering and ordering (date_creation or date_update, etc.)
+date_col = date_creation
+; Where results.csv is written before being uploaded.
+output = /var/lib/haoudej/results.csv
+
+[api]
+url = http://app.storeyes.io:9000/process
+; Sent as the X-API-KEY header. Leave blank if the endpoint does not require one.
+api_key =
+; Multipart form field name the CSV is uploaded under.
+field = file
+; Upload timeout, seconds.
+timeout = 120
+; device_id: leave blank to auto-derive from the Pi serial number.
+; Sent as the X-DEVICE-ID header so the backend knows which till this is.
+device_id =

@@ -33,7 +33,10 @@ tva = 10
 ; Column used for date filtering and ordering (date_creation or date_update, etc.)
 date_col = date_creation
 ; Where results.csv is written before being uploaded.
-output = /var/lib/haoudej/results.csv
+; Blank = results.csv beside the script, which is what you want in most cases.
+; A relative path is taken as relative to the script directory, not to cron's
+; working directory. Set an absolute path to write somewhere else entirely.
+output =
 
 [api]
 url = http://app.storeyes.io:9000/process

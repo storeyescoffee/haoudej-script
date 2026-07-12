@@ -4,10 +4,12 @@ main.py — Raspberry Pi (Pi 4/5) port of HaoudejProgram.
 
 Runs the MySQL sales query for a given day, writes results.csv, and POSTs it to
 the configured API endpoint. One-shot: it does its job and exits. Scheduling is
-cron's problem — `sudo python3 main.py --configure` writes /etc/cron.d/caisse.
+cron's problem — `python3 main.py --configure` writes /etc/cron.d/caisse.
 
-  sudo python3 main.py --configure   prompt for DB credentials + schedule, save,
+  python3 main.py --configure        prompt for DB credentials + schedule, save,
                                      write /etc/cron.d/caisse, test the connection
+                                     (that write needs root: sudo is invoked for
+                                     it alone, so config.conf stays yours)
   python3 main.py                    export+upload today
   python3 main.py --sync             identical to the above; explicit for cron
   python3 main.py --date 2026-07-01  ... a specific date instead
@@ -542,6 +544,39 @@ def render_cron(daily: tuple, reconcile: Optional[tuple], user: str,
         ]
     return "\n".join(lines) + "\n"
 
+def install_cron(cron_text: str) -> bool:
+    """Write CRON_FILE, escalating with sudo if we are not root.
+
+    Only this write is escalated, not the whole run: config.conf is deliberately
+    written as the invoking user, so it does not end up root-owned."""
+    try:
+        CRON_FILE.write_text(cron_text)
+        os.chmod(CRON_FILE, 0o644)  # cron ignores group/other-writable files
+        return True
+    except PermissionError:
+        pass
+    except OSError as exc:
+        print(f"\nCannot write {CRON_FILE}: {exc}")
+        return False
+
+    print(f"\n{CRON_FILE} needs root — sudo may ask for your password.")
+    try:
+        tee = subprocess.run(["sudo", "tee", str(CRON_FILE)],
+                             input=cron_text, text=True,
+                             stdout=subprocess.DEVNULL)
+        if tee.returncode == 0:
+            chmod = subprocess.run(["sudo", "chmod", "644", str(CRON_FILE)])
+            if chmod.returncode == 0:
+                return True
+    except FileNotFoundError:
+        print("sudo is not installed.")
+
+    print(f"\nCould not write {CRON_FILE} with sudo. Install the schedule by hand:\n")
+    print(f"  sudo tee {CRON_FILE} >/dev/null <<'EOF'")
+    print(cron_text + "EOF")
+    print(f"  sudo chmod 644 {CRON_FILE}")
+    return False
+
 def configure(path: Path):
     """Prompt for the database credentials and the schedule, write config.conf
     and /etc/cron.d/caisse."""
@@ -614,20 +649,9 @@ def configure(path: Path):
     # and writing /etc/cron.d already requires root anyway.
     cron_user = "root"
     cron_text = render_cron(daily, reconcile, cron_user, path.resolve())
-    try:
-        CRON_FILE.write_text(cron_text)
-        os.chmod(CRON_FILE, 0o644)  # cron ignores group/other-writable files
-        print(f"Written {CRON_FILE} (runs as {cron_user}).")
-    except PermissionError:
-        print(f"\nCannot write {CRON_FILE} — needs root. Either re-run with sudo,")
-        print("or install the schedule by hand:\n")
-        print(f"  sudo tee {CRON_FILE} >/dev/null <<'EOF'")
-        print(cron_text + "EOF")
-        print(f"  sudo chmod 644 {CRON_FILE}")
+    if not install_cron(cron_text):
         return 1
-    except OSError as exc:
-        print(f"\nCannot write {CRON_FILE}: {exc}")
-        return 1
+    print(f"Written {CRON_FILE} (runs as {cron_user}).")
 
     # Prove the credentials actually work rather than waiting for the nightly run.
     print("\nTesting the connection...")

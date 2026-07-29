@@ -396,6 +396,7 @@ def upload_csv(cfg: ConfigParser, device_id: str) -> int:
             url,
             headers=headers,
             files={field: (out_path.name, f, "text/csv")},
+            data={"skip_alert_trigger": "true"},
             timeout=timeout,
         )
 

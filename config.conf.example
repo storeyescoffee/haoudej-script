@@ -39,6 +39,10 @@ date_col = date_creation
 output =
 
 [api]
+; If an upload fails during the daily run, main.py queues a retry 30 minutes out
+; via the Linux `at` command (`python3 main.py --upload`), and keeps re-queuing
+; every 30 min until one succeeds. Needs the `at` package with atd running:
+;   sudo apt install at && sudo systemctl enable --now atd
 url = http://app.storeyes.io:9000/process
 ; Sent as the X-API-KEY header. Leave blank if the endpoint does not require one.
 api_key =

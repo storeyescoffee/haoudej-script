@@ -15,10 +15,20 @@ cron's problem — `python3 main.py --configure` writes /etc/cron.d/caisse.
   python3 main.py --date 2026-07-01  ... a specific date instead
   python3 main.py --reconcile [N]    ... each of the last N days (default 30)
   python3 main.py --resolve-mac      print the till's IP, found by MAC
+  python3 main.py --upload           re-POST the existing results.csv, no export
 
 Default and --sync both export TODAY. The nightly cron job therefore has to run
 in the evening, after trading has closed — an overnight run would export a day
 that has barely started. Use --date to pick up a day that was missed.
+
+If the upload step fails during the daily export (no flag / --sync / --date),
+main.py queues a one-shot `python3 main.py --upload` job 30 minutes out via the
+Linux `at` command, so the existing results.csv gets another shot without
+re-querying MySQL. If that retry also fails, it re-queues itself the same way —
+chaining every 30 minutes until an upload finally succeeds. Requires the `at`
+package with atd running: sudo apt install at && sudo systemctl enable --now atd.
+--reconcile does not chain retries; a failed day there waits for the next
+scheduled run.
 
 Exit status is 0 only if every upload succeeded, so cron mails you on failure.
 
@@ -33,6 +43,7 @@ import io
 import logging
 import os
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -403,11 +414,41 @@ def upload_csv(cfg: ConfigParser, device_id: str) -> int:
     log.info("upload: HTTP %d", resp.status_code)
     return resp.status_code
 
+def schedule_at_retry(config_path: Path, delay_minutes: int = 30) -> bool:
+    """Queue a one-shot `python3 main.py --upload --config <path>` job via the
+    Linux `at` command, `delay_minutes` from now. --upload re-POSTs whatever is
+    currently in results.csv and, on failure, calls this again — so a chain of
+    failures keeps retrying every `delay_minutes` until one finally succeeds.
+    Needs the `at` package with atd running: sudo apt install at &&
+    sudo systemctl enable --now atd. Scheduling failure is only logged; the
+    run that triggered it has already failed and exits non-zero either way."""
+    script = Path(__file__).resolve()
+    cmd = (f"{shlex.quote(sys.executable)} {shlex.quote(str(script))} "
+           f"--upload --config {shlex.quote(str(config_path.resolve()))}")
+    try:
+        proc = subprocess.run(["at", "now", "+", str(delay_minutes), "minutes"],
+                              input=cmd, text=True, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.error("could not run `at` to schedule an upload retry (%s) — "
+                   "is the `at` package installed? sudo apt install at && "
+                   "sudo systemctl enable --now atd", exc)
+        return False
+    if proc.returncode != 0:
+        log.error("failed to schedule `at` retry: %s", proc.stderr.strip())
+        return False
+    log.info("upload failed — retry scheduled via `at` in %d minutes", delay_minutes)
+    return True
+
 # ---------------------------------------------------------------------------
 # Job
 # ---------------------------------------------------------------------------
-def export_and_upload(cfg: ConfigParser, device_id: str, target_date: str) -> bool:
-    """Export target_date and upload it. True on success."""
+def export_and_upload(cfg: ConfigParser, device_id: str, target_date: str,
+                       config_path: Optional[Path] = None) -> bool:
+    """Export target_date and upload it. True on success.
+
+    config_path is only set for the daily export path (not --reconcile): when
+    given, an upload failure (but not an export failure — there'd be nothing
+    new to upload) queues a retry via schedule_at_retry."""
     try:
         rows = run_mysql_export(cfg, target_date)
     except Exception as exc:
@@ -418,12 +459,38 @@ def export_and_upload(cfg: ConfigParser, device_id: str, target_date: str) -> bo
         http = upload_csv(cfg, device_id)
     except Exception as exc:
         log.error("%s: rows=%d upload FAILED (%s)", target_date, rows, exc)
+        if config_path is not None:
+            schedule_at_retry(config_path)
         return False
 
     ok = 200 <= http < 300
     log.log(logging.INFO if ok else logging.ERROR,
             "%s: rows=%d upload=%s http=%d",
             target_date, rows, "OK" if ok else "FAILED", http)
+    if not ok and config_path is not None:
+        schedule_at_retry(config_path)
+    return ok
+
+def upload_only(cfg: ConfigParser, device_id: str, config_path: Path) -> bool:
+    """--upload: re-POST the existing results.csv, no MySQL export. On failure,
+    reschedules itself via `at` in 30 minutes (see schedule_at_retry)."""
+    out_path = output_path(cfg)
+    if not out_path.exists():
+        log.error("--upload: %s not found; nothing to upload", out_path)
+        return False
+
+    try:
+        http = upload_csv(cfg, device_id)
+    except Exception as exc:
+        log.error("--upload: FAILED (%s)", exc)
+        schedule_at_retry(config_path)
+        return False
+
+    ok = 200 <= http < 300
+    log.log(logging.INFO if ok else logging.ERROR,
+            "--upload: %s http=%d", "OK" if ok else "FAILED", http)
+    if not ok:
+        schedule_at_retry(config_path)
     return ok
 
 # ---------------------------------------------------------------------------
@@ -683,6 +750,9 @@ def main():
                       help="Export and upload a specific date")
     mode.add_argument("--resolve-mac", action="store_true",
                       help="Look up [mysql] mac on the local subnet, print the IP, exit")
+    mode.add_argument("--upload", action="store_true",
+                      help="Upload the existing results.csv only, no export; "
+                           "reschedules itself via `at` every 30 min on failure")
     mode.add_argument("--configure", action="store_true",
                       help="Prompt for the database credentials and save them to config.conf")
 
@@ -707,13 +777,16 @@ def main():
         print(ip)
         sys.exit(0)
 
+    device_id = get_device_id(cfg)
+    log.info("Device ID: %s", device_id)
+
+    if args.upload:
+        sys.exit(0 if upload_only(cfg, device_id, args.config) else 1)
+
     db_name = cfg.get("mysql", "database", fallback="")
     if not db_name or db_name == "CHANGE_ME":
         log.error("[mysql] database is not configured in %s", args.config)
         sys.exit(1)
-
-    device_id = get_device_id(cfg)
-    log.info("Device ID: %s", device_id)
 
     if args.reconcile is not None:
         days = max(1, args.reconcile)
@@ -725,7 +798,7 @@ def main():
 
     # No flag and --sync are the same thing: today.
     target = args.date if args.date else today_str()
-    sys.exit(0 if export_and_upload(cfg, device_id, target) else 1)
+    sys.exit(0 if export_and_upload(cfg, device_id, target, config_path=args.config) else 1)
 
 
 if __name__ == "__main__":

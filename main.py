@@ -321,7 +321,7 @@ def connect_mysql(cfg: ConfigParser):
 
 SALES_SQL = """\
 SELECT
-    a.article_id                                           AS ART_ID,
+    COALESCE(a.article_id, 1234)                           AS ART_ID,
     m.{date_col}                                           AS VTE_DATE_HEURE,
     TIME(m.{date_col})                                     AS VTE_HEURE,
     a.libelle                                              AS ART_LIBELLE,

@@ -338,7 +338,6 @@ LEFT JOIN `user` u ON u.id = m.user_id
 WHERE DATE(m.{date_col}) = '{date}'
   AND (m.is_annule IS NULL OR m.is_annule = 0)
   AND (a.is_annule IS NULL OR a.is_annule = 0)
-  AND a.mtt_total <> 0
 ORDER BY m.{date_col}, m.id, a.idx_element
 """
 

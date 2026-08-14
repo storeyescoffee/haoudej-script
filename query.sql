@@ -40,18 +40,18 @@ SELECT
     grp                                                  AS LIGNE_IDX,
 
     MAX(CASE WHEN idx = grp THEN article_id END)         AS ART_ID,
-    MAX(CASE WHEN idx = grp THEN libelle END)            AS ART_LIBELLE,
 
-    GROUP_CONCAT(CASE WHEN idx < grp THEN libelle END
-                 ORDER BY idx SEPARATOR ' - ')           AS CONTEXTE,
-
-    -- article first, then its folded-in lines: "CAFE NOIR - BOISSON CHAUD - AVEC EAU"
+    -- article first, then its folded-in lines:
+    --   "CAFE NOIR - BOISSON CHAUD - AVEC EAU"
     -- CONCAT_WS drops the NULL, so a context-less line is just "CAFE NOIR"
     CONCAT_WS(' - ',
         MAX(CASE WHEN idx = grp THEN libelle END),
         GROUP_CONCAT(CASE WHEN idx < grp THEN libelle END
                      ORDER BY idx SEPARATOR ' - ')
-    )                                                    AS CHEMIN,
+    )                                                    AS ART_LIBELLE,
+
+    GROUP_CONCAT(CASE WHEN idx < grp THEN libelle END
+                 ORDER BY idx SEPARATOR ' - ')           AS CONTEXTE,
 
     -- to drop the leading category and get "CAFE NOIR - AVEC EAU", swap the
     -- GROUP_CONCAT condition above for:

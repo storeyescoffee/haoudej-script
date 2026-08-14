@@ -321,24 +321,48 @@ def connect_mysql(cfg: ConfigParser):
 
 SALES_SQL = """\
 SELECT
-    COALESCE(a.article_id, 1234)                           AS ART_ID,
-    m.{date_col}                                           AS VTE_DATE_HEURE,
-    TIME(m.{date_col})                                     AS VTE_HEURE,
-    a.libelle                                              AS ART_LIBELLE,
-    a.quantite                                             AS VTE_QUANTITE,
-    ROUND(a.mtt_total / NULLIF(a.quantite, 0), 2)          AS VTE_PRIX_DE_VENTE,
-    ROUND(a.mtt_total, 2)                                  AS TOTAL_TTC,
-    ROUND(a.mtt_total / (1 + {tva}/100), 2)                AS TOTAL_HT,
-    ROUND(a.mtt_total - a.mtt_total / (1 + {tva}/100), 2) AS TOTAL_TVA,
-    m.id                                                   AS VTE_ORDRE,
-    u.login                                                AS USR_NOM
+    m.id                                            AS VTE_ORDRE,
+    m.{date_col}                                    AS VTE_DATE_HEURE,
+    TIME(m.{date_col})                              AS VTE_HEURE,
+    u.login                                         AS USR_NOM,
+    COUNT(*)                                        AS NB_LIGNES,
+    SUM(CASE WHEN a.mtt_total > 0 THEN 1 ELSE 0 END) AS NB_LIGNES_PAYANTES,
+    SUM(CASE WHEN a.mtt_total > 0 THEN a.quantite ELSE 0 END) AS VTE_QUANTITE,
+    GROUP_CONCAT(
+        COALESCE(a.libelle, '?')
+        ORDER BY a.idx_element
+        SEPARATOR '~'
+    )                                               AS TICKET_SIGNATURE,
+    GROUP_CONCAT(
+        CASE WHEN a.mtt_total > 0 THEN COALESCE(a.libelle, '?') END
+        ORDER BY a.idx_element
+        SEPARATOR '~'
+    )                                               AS ART_LIBELLE,
+    GROUP_CONCAT(
+        CASE WHEN a.mtt_total > 0
+             THEN COALESCE(CAST(a.article_id AS CHAR), 'NA') END
+        ORDER BY a.idx_element
+        SEPARATOR '~'
+    )                                               AS ART_IDS,
+    GROUP_CONCAT(
+        CASE WHEN a.mtt_total = 0 AND a.article_id IS NOT NULL
+             THEN COALESCE(a.libelle, '?') END
+        ORDER BY a.idx_element
+        SEPARATOR '~'
+    )                                               AS ART_OFFERTS,
+    ROUND(SUM(a.mtt_total), 2)                      AS TOTAL_TTC,
+    ROUND(SUM(a.mtt_total) / (1 + {tva}/100), 2)    AS TOTAL_HT,
+    ROUND(SUM(a.mtt_total)
+          - SUM(a.mtt_total) / (1 + {tva}/100), 2)  AS TOTAL_TVA
+ 
 FROM caisse_mouvement m
 JOIN caisse_mouvement_article a ON a.mvm_caisse_id = m.id
 LEFT JOIN `user` u ON u.id = m.user_id
 WHERE DATE(m.{date_col}) = '{date}'
   AND (m.is_annule IS NULL OR m.is_annule = 0)
   AND (a.is_annule IS NULL OR a.is_annule = 0)
-ORDER BY m.{date_col}, m.id, a.idx_element
+GROUP BY m.id, m.{date_col}, u.login
+ORDER BY m.{date_col}, m.id;
 """
 
 def output_path(cfg: ConfigParser) -> Path:

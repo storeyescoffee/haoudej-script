@@ -1,7 +1,10 @@
--- One row per real article, with the NULL structural lines above it folded in.
--- grp = idx_element of the next non-NULL article at or after the current line.
-
-SET SESSION group_concat_max_len = 8192;
+-- One row per billable line. Structural NULL lines fold into the line below.
+-- Priced lines anchor their own group, so breakfast formulas stay separate
+-- from the drink they include.
+--
+-- NOTE: run this SET on its own execute(), not concatenated with the SELECT --
+-- the connector rejects multi-statement and reports the error at line 6.
+--   SET SESSION group_concat_max_len = 8192;
 
 WITH lignes AS (
     SELECT
@@ -13,7 +16,8 @@ WITH lignes AS (
         a.libelle,
         a.quantite,
         a.mtt_total,
-        MIN(CASE WHEN a.article_id IS NOT NULL THEN a.idx_element END)
+        MIN(CASE WHEN a.article_id IS NOT NULL OR a.mtt_total <> 0
+                 THEN a.idx_element END)
             OVER (PARTITION BY m.id
                   ORDER BY a.idx_element
                   ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS grp
@@ -23,6 +27,10 @@ WITH lignes AS (
     WHERE DATE(m.{date_col}) = '{date}'
       AND (m.is_annule IS NULL OR m.is_annule = 0)
       AND (a.is_annule IS NULL OR a.is_annule = 0)
+),
+groupes AS (
+    SELECT l.*, MIN(idx) OVER (PARTITION BY ticket_id, grp) AS idx_debut
+    FROM lignes l
 )
 SELECT
     ticket_id                                            AS VTE_ORDRE,
@@ -34,12 +42,20 @@ SELECT
     MAX(CASE WHEN idx = grp THEN article_id END)         AS ART_ID,
     MAX(CASE WHEN idx = grp THEN libelle END)            AS ART_LIBELLE,
 
-    -- the folded-in headers and modifiers, in register order
     GROUP_CONCAT(CASE WHEN idx < grp THEN libelle END
-                 ORDER BY idx SEPARATOR '-')             AS CONTEXTE,
+                 ORDER BY idx SEPARATOR ' - ')           AS CONTEXTE,
 
-    -- full path, e.g. "BOISSON CHAUD-AVEC EAU-CAFE NOIR"
-    GROUP_CONCAT(libelle ORDER BY idx SEPARATOR '-')     AS CHEMIN,
+    -- article first, then its folded-in lines: "CAFE NOIR - BOISSON CHAUD - AVEC EAU"
+    -- CONCAT_WS drops the NULL, so a context-less line is just "CAFE NOIR"
+    CONCAT_WS(' - ',
+        MAX(CASE WHEN idx = grp THEN libelle END),
+        GROUP_CONCAT(CASE WHEN idx < grp THEN libelle END
+                     ORDER BY idx SEPARATOR ' - ')
+    )                                                    AS CHEMIN,
+
+    -- to drop the leading category and get "CAFE NOIR - AVEC EAU", swap the
+    -- GROUP_CONCAT condition above for:
+    --     CASE WHEN idx < grp AND idx > idx_debut THEN libelle END
 
     MAX(CASE WHEN idx = grp THEN quantite END)           AS VTE_QUANTITE,
 
@@ -51,19 +67,6 @@ SELECT
     ROUND(SUM(mtt_total)
           - SUM(mtt_total) / (1 + {tva}/100), 2)         AS TOTAL_TVA
 
-FROM lignes
+FROM groupes
 GROUP BY ticket_id, dt, usr, grp
 ORDER BY dt, ticket_id, grp;
-
-
--- ---------------------------------------------------------------------------
--- Variant: keep priced formula lines as their own row instead of folding
--- their price onto the included drink. Change only the window expression:
---
---     MIN(CASE WHEN a.article_id IS NOT NULL OR a.mtt_total <> 0
---              THEN a.idx_element END)
---         OVER (PARTITION BY m.id ORDER BY a.idx_element
---               ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS grp
---
--- Every other line of the query stays identical.
--- ---------------------------------------------------------------------------

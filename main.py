@@ -319,51 +319,10 @@ def connect_mysql(cfg: ConfigParser):
     _resolved_host = ip
     return conn
 
-SALES_SQL = """\
-SELECT
-    m.id                                            AS VTE_ORDRE,
-    m.{date_col}                                    AS VTE_DATE_HEURE,
-    TIME(m.{date_col})                              AS VTE_HEURE,
-    u.login                                         AS USR_NOM,
-    COUNT(*)                                        AS NB_LIGNES,
-    SUM(CASE WHEN a.mtt_total > 0 THEN 1 ELSE 0 END) AS NB_LIGNES_PAYANTES,
-    SUM(CASE WHEN a.mtt_total > 0 THEN a.quantite ELSE 0 END) AS VTE_QUANTITE,
-    GROUP_CONCAT(
-        COALESCE(a.libelle, '?')
-        ORDER BY a.idx_element
-        SEPARATOR '~'
-    )                                               AS TICKET_SIGNATURE,
-    GROUP_CONCAT(
-        CASE WHEN a.mtt_total > 0 THEN COALESCE(a.libelle, '?') END
-        ORDER BY a.idx_element
-        SEPARATOR '~'
-    )                                               AS ART_LIBELLE,
-    GROUP_CONCAT(
-        CASE WHEN a.mtt_total > 0
-             THEN COALESCE(CAST(a.article_id AS CHAR), 'NA') END
-        ORDER BY a.idx_element
-        SEPARATOR '~'
-    )                                               AS ART_IDS,
-    GROUP_CONCAT(
-        CASE WHEN a.mtt_total = 0 AND a.article_id IS NOT NULL
-             THEN COALESCE(a.libelle, '?') END
-        ORDER BY a.idx_element
-        SEPARATOR '~'
-    )                                               AS ART_OFFERTS,
-    ROUND(SUM(a.mtt_total), 2)                      AS TOTAL_TTC,
-    ROUND(SUM(a.mtt_total) / (1 + {tva}/100), 2)    AS TOTAL_HT,
-    ROUND(SUM(a.mtt_total)
-          - SUM(a.mtt_total) / (1 + {tva}/100), 2)  AS TOTAL_TVA
- 
-FROM caisse_mouvement m
-JOIN caisse_mouvement_article a ON a.mvm_caisse_id = m.id
-LEFT JOIN `user` u ON u.id = m.user_id
-WHERE DATE(m.{date_col}) = '{date}'
-  AND (m.is_annule IS NULL OR m.is_annule = 0)
-  AND (a.is_annule IS NULL OR a.is_annule = 0)
-GROUP BY m.id, m.{date_col}, u.login
-ORDER BY m.{date_col}, m.id;
-"""
+SALES_SQL_FILE = DATA_DIR / "query.sql"
+
+def load_sales_sql() -> str:
+    return SALES_SQL_FILE.read_text(encoding="utf-8")
 
 def output_path(cfg: ConfigParser) -> Path:
     """Where results.csv goes. Blank [query] output means the default beside the
@@ -386,7 +345,7 @@ def run_mysql_export(cfg: ConfigParser, target_date: str) -> int:
     conn = connect_mysql(cfg)
     try:
         cur = conn.cursor()
-        sql = SALES_SQL.format(tva=tva, date_col=date_col, date=target_date)
+        sql = load_sales_sql().format(tva=tva, date_col=date_col, date=target_date)
         cur.execute(sql)
         columns = [d[0] for d in cur.description]
         rows = cur.fetchall()

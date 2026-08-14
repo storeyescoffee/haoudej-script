@@ -1,0 +1,9 @@
+# The script writes these next to itself.
+haoudej.log
+results.csv
+
+# Holds the database password — copy config.conf.example instead.
+config.conf
+
+__pycache__/
+*.pyc

@@ -324,6 +324,22 @@ SALES_SQL_FILE = DATA_DIR / "query.sql"
 def load_sales_sql() -> str:
     return SALES_SQL_FILE.read_text(encoding="utf-8")
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a .sql file into individual statements. MySQLdb sends one query per
+    execute() call (no CLIENT_MULTI_STATEMENTS), so a file with a SET SESSION
+    line followed by the real query has to be split and executed one at a time
+    or the server errors out on the second statement. Trailing comment-only
+    chunks (like the documented query variant at the bottom of query.sql) are
+    dropped rather than sent as empty statements."""
+    statements = []
+    for chunk in sql.split(";"):
+        stmt = "\n".join(
+            line for line in chunk.splitlines() if not line.strip().startswith("--")
+        ).strip()
+        if stmt:
+            statements.append(stmt)
+    return statements
+
 def output_path(cfg: ConfigParser) -> Path:
     """Where results.csv goes. Blank [query] output means the default beside the
     script — an empty value in config.conf overrides the seeded default, so it has
@@ -346,7 +362,10 @@ def run_mysql_export(cfg: ConfigParser, target_date: str) -> int:
     try:
         cur = conn.cursor()
         sql = load_sales_sql().format(tva=tva, date_col=date_col, date=target_date)
-        cur.execute(sql)
+        statements = _split_sql_statements(sql)
+        for stmt in statements[:-1]:
+            cur.execute(stmt)
+        cur.execute(statements[-1])
         columns = [d[0] for d in cur.description]
         rows = cur.fetchall()
         cur.close()

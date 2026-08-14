@@ -16,7 +16,7 @@ WITH lignes AS (
         a.libelle,
         a.quantite,
         a.mtt_total,
-        MIN(CASE WHEN a.article_id IS NOT NULL OR a.mtt_total <> 0
+        MIN(CASE WHEN a.article_id IS NOT NULL
                  THEN a.idx_element END)
             OVER (PARTITION BY m.id
                   ORDER BY a.idx_element
@@ -52,6 +52,11 @@ SELECT
 
     GROUP_CONCAT(CASE WHEN idx < grp THEN libelle END
                  ORDER BY idx SEPARATOR ' - ')           AS CONTEXTE,
+
+    -- the priced line with no article_id, i.e. the breakfast formula that
+    -- actually carries the money. NULL on ordinary a-la-carte lines.
+    MAX(CASE WHEN article_id IS NULL AND mtt_total <> 0
+             THEN libelle END)                           AS FORMULE,
 
     -- to drop the leading category and get "CAFE NOIR - AVEC EAU", swap the
     -- GROUP_CONCAT condition above for:

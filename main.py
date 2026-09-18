@@ -60,11 +60,11 @@ import requests
 # Paths
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = Path(__file__).parent / "config.conf"
-# Everything the script writes lives beside the script: config.conf, haoudej.log,
+# Everything the script writes lives beside the script: config.conf, logs/,
 # results.csv. Nothing is a daemon, so there is no state to put under /var/lib —
 # and keeping it here means the script does not need root just to start up.
 DATA_DIR       = Path(__file__).resolve().parent
-LOG_FILE       = DATA_DIR / "haoudej.log"
+LOG_DIR        = DATA_DIR / "logs"            # one file per day: logs/YYYY-MM-DD.log
 CRON_FILE      = Path("/etc/cron.d/caisse")   # written by --configure, needs root
 
 # ---------------------------------------------------------------------------
@@ -73,8 +73,11 @@ CRON_FILE      = Path("/etc/cron.d/caisse")   # written by --configure, needs ro
 def _setup_logging():
     fmt = "%(asctime)s  %(levelname)s  %(message)s"
     handlers = [logging.StreamHandler(sys.stdout)]
+    # Each run is short-lived, so the file is picked once from the start date;
+    # a run that crosses midnight keeps writing to the day it began on.
     try:
-        handlers.append(logging.FileHandler(LOG_FILE))
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(LOG_DIR / f"{date.today().isoformat()}.log"))
     except OSError:
         pass
     logging.basicConfig(level=logging.INFO, format=fmt, handlers=handlers)
@@ -592,7 +595,7 @@ def render_cron(daily: tuple, reconcile: Optional[tuple], user: str,
         "# and CSV it writes next to the script end up owned by root — chown them",
         f"# back if you want to read them as {user} without sudo.",
         "#",
-        f"# Output goes to {LOG_FILE}. Failed runs exit non-zero;",
+        f"# Output goes to {LOG_DIR}/YYYY-MM-DD.log. Failed runs exit non-zero;",
         "# set MAILTO to have cron mail you about them.",
         "SHELL=/bin/sh",
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

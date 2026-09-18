@@ -1,5 +1,5 @@
 # The script writes these next to itself.
-haoudej.log
+logs/
 results.csv
 
 # Holds the database password — copy config.conf.example instead.

@@ -4,13 +4,10 @@ main.py — Raspberry Pi (Pi 4/5) port of HaoudejProgram.
 
 Runs the MySQL sales query for a given day, writes results.csv, and POSTs it to
 the configured API endpoint. One-shot: it does its job and exits. Scheduling is
-cron's problem — `python3 main.py --configure` writes /etc/cron.d/caisse.
+cron's problem — `sudo ./install.sh` writes /etc/cron.d/caisse. Database
+credentials go in config.conf (copy config.conf.example).
 
-  python3 main.py --configure        prompt for DB credentials + schedule, save,
-                                     write /etc/cron.d/caisse, test the connection
-                                     (that write needs root: sudo is invoked for
-                                     it alone, so config.conf stays yours)
-  python3 main.py                    export+upload today
+  python3 main.py                   export+upload today
   python3 main.py --sync             identical to the above; explicit for cron
   python3 main.py --date 2026-07-01  ... a specific date instead
   python3 main.py --reconcile [N]    ... each of the last N days (default 30)
@@ -38,7 +35,6 @@ Device ID: read from /proc/device-tree/serial-number (Pi 4/5 native),
 
 import argparse
 import csv
-import getpass
 import io
 import logging
 import os
@@ -65,7 +61,6 @@ DEFAULT_CONFIG = Path(__file__).parent / "config.conf"
 # and keeping it here means the script does not need root just to start up.
 DATA_DIR       = Path(__file__).resolve().parent
 LOG_DIR        = DATA_DIR / "logs"            # one file per day: logs/YYYY-MM-DD.log
-CRON_FILE      = Path("/etc/cron.d/caisse")   # written by --configure, needs root
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -498,245 +493,6 @@ def upload_only(cfg: ConfigParser, device_id: str, config_path: Path) -> bool:
     return ok
 
 # ---------------------------------------------------------------------------
-# --configure
-# ---------------------------------------------------------------------------
-def write_section_values(path: Path, section: str, values: dict):
-    """Update `key = value` lines inside [section], leaving the rest of the file
-    — comments included — byte-for-byte intact. ConfigParser.write() would drop
-    every comment, so the file is edited line by line instead. Keys not already
-    present are appended to the section; a missing section is appended whole."""
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-
-    out, pending = [], dict(values)
-    in_section = False
-    section_end = None  # index in `out` just past the last line of our section
-
-    for line in lines:
-        header = re.match(r"\s*\[(.+?)\]\s*$", line)
-        if header:
-            if in_section:          # leaving our section
-                section_end = len(out)
-            in_section = header.group(1) == section
-            out.append(line)
-            continue
-
-        if in_section:
-            kv = re.match(r"(\s*)([^#;=\s][^=]*?)(\s*=\s*)(.*)$", line)
-            if kv and kv.group(2).strip() in pending:
-                key = kv.group(2).strip()
-                out.append(f"{kv.group(1)}{kv.group(2)}{kv.group(3)}{pending.pop(key)}")
-                continue
-
-        out.append(line)
-
-    if in_section:                  # our section ran to end of file
-        section_end = len(out)
-
-    if section_end is None:         # section absent entirely
-        if out and out[-1].strip():
-            out.append("")
-        out.append(f"[{section}]")
-        section_end = len(out)
-
-    # Append whatever keys the section did not already have.
-    for key, value in pending.items():
-        out.insert(section_end, f"{key} = {value}")
-        section_end += 1
-
-    path.write_text("\n".join(out) + "\n", encoding="utf-8")
-
-def _prompt(label: str, current: str, secret: bool = False) -> str:
-    """Ask for one value, offering the current one as the default."""
-    if secret:
-        shown = "*" * len(current) if current else "empty"
-        entered = getpass.getpass(f"  {label} [{shown}]: ")
-    else:
-        entered = input(f"  {label} [{current or 'empty'}]: ").strip()
-    return entered if entered else current
-
-def _existing_cron_times() -> dict:
-    """Current HH:MM / weekday out of /etc/cron.d/caisse, to offer as defaults."""
-    found = {}
-    try:
-        text = CRON_FILE.read_text()
-    except OSError:
-        return found
-    for line in text.splitlines():
-        if line.startswith("#") or "main.py" not in line:
-            continue
-        f = line.split()
-        if len(f) < 5:
-            continue
-        minute, hour, dow = f[0], f[1], f[4]
-        if "--reconcile" in line:
-            found["reconcile"] = f"{dow} {int(hour):02d}:{int(minute):02d}"
-        else:
-            found["daily"] = f"{int(hour):02d}:{int(minute):02d}"
-    return found
-
-def _parse_hhmm(raw: str) -> Optional[tuple]:
-    m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", raw.strip())
-    return (int(m.group(1)), int(m.group(2))) if m else None
-
-def render_cron(daily: tuple, reconcile: Optional[tuple], user: str,
-                config_path: Path) -> str:
-    """Build the /etc/cron.d/caisse content. Note the user column — cron.d entries
-    carry one, unlike a per-user crontab."""
-    script = Path(__file__).resolve()
-    cmd    = f"{sys.executable} {script} --config {config_path}"
-    dh, dm = daily
-
-    lines = [
-        "# HaoudejProgram — daily MySQL sales export and upload.",
-        "# Generated by `main.py --configure`; re-run it to change the schedule.",
-        "#",
-        "# Runs as root: the MAC fallback in [mysql] shells out to arp-scan, which",
-        "# needs raw sockets. No sudoers entry required. Because of that, the log",
-        "# and CSV it writes next to the script end up owned by root — chown them",
-        f"# back if you want to read them as {user} without sudo.",
-        "#",
-        f"# Output goes to {LOG_DIR}/YYYY-MM-DD.log. Failed runs exit non-zero;",
-        "# set MAILTO to have cron mail you about them.",
-        "SHELL=/bin/sh",
-        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        'MAILTO=""',
-        "",
-        "# --sync exports TODAY, whatever the hour — so this has to be an evening",
-        "# time, once trading has closed. An overnight run would export a day that",
-        "# has barely started. To backfill a missed day, run main.py --date YYYY-MM-DD.",
-        f"{dm} {dh} * * *\t{user}\t{cmd} --sync",
-    ]
-    if reconcile:
-        rdow, rh, rm = reconcile
-        lines += [
-            "",
-            "# Weekly catch-up: re-export the last 30 days so a failed or skipped nightly",
-            "# run gets backfilled. 30 sequential export+upload cycles — not fast.",
-            f"{rm} {rh} * * {rdow}\t{user}\t{cmd} --reconcile 30",
-        ]
-    return "\n".join(lines) + "\n"
-
-def install_cron(cron_text: str) -> bool:
-    """Write CRON_FILE, escalating with sudo if we are not root.
-
-    Only this write is escalated, not the whole run: config.conf is deliberately
-    written as the invoking user, so it does not end up root-owned."""
-    try:
-        CRON_FILE.write_text(cron_text)
-        os.chmod(CRON_FILE, 0o644)  # cron ignores group/other-writable files
-        return True
-    except PermissionError:
-        pass
-    except OSError as exc:
-        print(f"\nCannot write {CRON_FILE}: {exc}")
-        return False
-
-    print(f"\n{CRON_FILE} needs root — sudo may ask for your password.")
-    try:
-        tee = subprocess.run(["sudo", "tee", str(CRON_FILE)],
-                             input=cron_text, text=True,
-                             stdout=subprocess.DEVNULL)
-        if tee.returncode == 0:
-            chmod = subprocess.run(["sudo", "chmod", "644", str(CRON_FILE)])
-            if chmod.returncode == 0:
-                return True
-    except FileNotFoundError:
-        print("sudo is not installed.")
-
-    print(f"\nCould not write {CRON_FILE} with sudo. Install the schedule by hand:\n")
-    print(f"  sudo tee {CRON_FILE} >/dev/null <<'EOF'")
-    print(cron_text + "EOF")
-    print(f"  sudo chmod 644 {CRON_FILE}")
-    return False
-
-def configure(path: Path):
-    """Prompt for the database credentials and the schedule, write config.conf
-    and /etc/cron.d/caisse."""
-    cfg = load_config(path)
-    m   = cfg["mysql"]
-
-    print(f"Database settings — {path}")
-    print("Press Enter to keep the current value shown in brackets.\n")
-
-    values = {
-        "host":     _prompt("host",     m.get("host", "")),
-        "port":     _prompt("port",     m.get("port", "3306")),
-        "user":     _prompt("user",     m.get("user", "")),
-        "password": _prompt("password", m.get("password", ""), secret=True),
-        "database": _prompt("database", m.get("database", "")),
-        "mac":      _prompt("mac (blank = no fallback)", m.get("mac", "")),
-    }
-
-    if not values["port"].isdigit():
-        print(f"\nport must be a number, got '{values['port']}'. Nothing written.")
-        return 1
-    if not values["database"] or values["database"] == "CHANGE_ME":
-        print("\ndatabase is required. Nothing written.")
-        return 1
-    if values["mac"]:
-        canonical = normalize_mac(values["mac"])
-        if not _MAC_RE.match(canonical):
-            print(f"\n'{values['mac']}' is not a valid MAC address. Nothing written.")
-            return 1
-        values["mac"] = canonical
-
-    # ---- schedule -----------------------------------------------------------
-    current = _existing_cron_times()
-    print(f"\nSchedule — {CRON_FILE}")
-
-    raw_daily = _prompt("daily run time HH:MM", current.get("daily", "23:30"))
-    daily = _parse_hhmm(raw_daily)
-    if not daily:
-        print(f"\n'{raw_daily}' is not a valid HH:MM time. Nothing written.")
-        return 1
-    if daily[0] < 12:
-        # The job exports today, so before noon it would export a day that has
-        # only just started.
-        print(f"\n{raw_daily} is before midday. The job exports today, so it would")
-        print("export a day that has barely begun. Pick an evening time, after")
-        print("trading has closed. Nothing written.")
-        return 1
-
-    raw_rec = _prompt("weekly reconcile, 'DOW HH:MM' (0=Sun, blank = off)",
-                      current.get("reconcile", "0 03:00"))
-    reconcile = None
-    if raw_rec.strip():
-        parts = raw_rec.split()
-        hhmm  = _parse_hhmm(parts[-1]) if parts else None
-        dow   = parts[0] if len(parts) == 2 else None
-        if not hhmm or dow not in {str(d) for d in range(7)}:
-            print(f"\n'{raw_rec}' is not a valid 'DOW HH:MM' (0-6). Nothing written.")
-            return 1
-        reconcile = (int(dow), hhmm[0], hhmm[1])
-
-    # ---- write --------------------------------------------------------------
-    write_section_values(path, "mysql", values)
-    try:
-        os.chmod(path, 0o600)  # the file now holds a password
-    except OSError as exc:
-        print(f"warning: could not chmod 600 {path}: {exc}")
-    print(f"\nWritten {path}.")
-
-    # cron.d entries name the user to run as. root: arp-scan needs raw sockets,
-    # and writing /etc/cron.d already requires root anyway.
-    cron_user = "root"
-    cron_text = render_cron(daily, reconcile, cron_user, path.resolve())
-    if not install_cron(cron_text):
-        return 1
-    print(f"Written {CRON_FILE} (runs as {cron_user}).")
-
-    # Prove the credentials actually work rather than waiting for the nightly run.
-    print("\nTesting the connection...")
-    try:
-        conn = connect_mysql(load_config(path))
-    except Exception as exc:
-        print(f"FAILED: {exc}")
-        return 1
-    conn.close()
-    print("Connected.")
-    return 0
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def main():
@@ -757,16 +513,10 @@ def main():
     mode.add_argument("--upload", action="store_true",
                       help="Upload the existing results.csv only, no export; "
                            "reschedules itself via `at` every 30 min on failure")
-    mode.add_argument("--configure", action="store_true",
-                      help="Prompt for the database credentials and save them to config.conf")
 
     args = parser.parse_args()
 
     _setup_logging()
-
-    # Runs before the config is validated — it is what makes an invalid config valid.
-    if args.configure:
-        sys.exit(configure(args.config))
 
     cfg = load_config(args.config)
 

@@ -2,10 +2,9 @@
 ;   cp config.conf.example config.conf
 ; config.conf holds credentials — keep it out of git (chmod 600).
 ;
-; Or just run `sudo python3 main.py --configure`, which prompts for the database
-; credentials and the schedule, writes them here, and installs /etc/cron.d/caisse.
+; `sudo ./install.sh` does this copy for you if config.conf is missing.
 ;
-; Scheduling lives in cron, not here — see /etc/cron.d/caisse.
+; Scheduling lives in cron, not here — install.sh writes /etc/cron.d/caisse.
 
 [mysql]
 host = 127.0.0.1

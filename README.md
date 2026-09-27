@@ -16,7 +16,8 @@ sudo ./install.sh
 
 - installs the system packages (`python3`, `python3-mysqldb`, `python3-requests`, `arp-scan`, `at`, `cron`)
 - copies `config.conf.example` to `config.conf` if it doesn't exist
-- writes `/etc/cron.d/caisse`, which runs `main.py --sync` every day at 23:00
+- lets `m0hcine24` run `arp-scan` via sudo without a password (`/etc/sudoers.d/caisse`), for the MAC fallback
+- writes `/etc/cron.d/caisse`, which runs `main.py --sync` as `m0hcine24` every day at 23:00
 
 It is safe to re-run.
 
@@ -26,7 +27,7 @@ Edit `config.conf` with the database credentials and API settings; see the
 comments in `config.conf.example`. Then run once by hand to check it works:
 
 ```sh
-sudo python3 main.py --sync
+python3 main.py --sync
 ```
 
 Logs go to `logs/YYYY-MM-DD.log`.

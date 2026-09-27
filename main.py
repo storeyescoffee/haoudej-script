@@ -194,8 +194,8 @@ def _arp_scan_lookup(mac: str) -> Optional[str]:
     """IP of `mac` via `sudo arp-scan --localnet | awk '/<mac>/{print $1; exit}'`.
 
     Preferred over the ping sweep: it ARPs every host directly, so it also finds
-    machines that drop ICMP. arp-scan needs raw sockets, hence sudo; the cron job
-    already runs as root, so sudo is a no-op there. Returns None if arp-scan is
+    machines that drop ICMP. arp-scan needs raw sockets, hence sudo; install.sh
+    adds a NOPASSWD sudoers rule for the cron user. Returns None if arp-scan is
     missing, sudo is not permitted, or the MAC is not on the subnet.
 
     `mac` must already be normalized; it is interpolated into the awk program."""

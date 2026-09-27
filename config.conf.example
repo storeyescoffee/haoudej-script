@@ -17,8 +17,8 @@ database = CHANGE_ME
 ; If the host above refuses the connection, the MAC is looked up in the ARP cache,
 ; then via `sudo arp-scan --localnet`, then via a ping sweep, and the resulting IP
 ; is used instead. For the arp-scan step:  sudo apt install arp-scan
-; (arp-scan needs root; the cron job runs as root, so nothing extra is needed.
-;  Running it by hand as a normal user will prompt for a sudo password.)
+; (arp-scan needs root; install.sh adds /etc/sudoers.d/caisse so the cron user
+;  can run it via sudo without a password.)
 ; Only works on the same subnet as the Pi — a MAC does not cross a router.
 ; Test it with: python3 main.py --resolve-mac
 ; mac = 30:0e:d5:34:70:2e

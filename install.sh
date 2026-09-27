@@ -3,11 +3,12 @@
 #
 #   sudo ./install.sh
 #
-# Installs the system packages, builds a virtualenv in .venv with the Python
-# deps from requirements.txt, and writes /etc/cron.d/caisse to run
-# `main.py --sync` every day at 23:00. No weekly --reconcile job is installed.
+# Installs the system packages, including the Python deps (MySQLdb, requests)
+# from apt so the system python3 can run main.py, and writes /etc/cron.d/caisse
+# to run `main.py --sync` every day at 23:00. No weekly --reconcile job is
+# installed.
 #
-# Safe to re-run: it overwrites the cron file and updates the venv in place.
+# Safe to re-run: it overwrites the cron file.
 set -eu
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -16,26 +17,19 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV="$APP_DIR/.venv"
 CRON_FILE=/etc/cron.d/caisse  # cron.d ignores names containing dots
-# Owner of the checkout, so the venv and config.conf don't end up root-owned.
+# Owner of the checkout, so config.conf doesn't end up root-owned.
 OWNER="$(stat -c %U "$APP_DIR")"
 
 echo "==> Installing system packages"
 apt-get update
-# mysqlclient builds against libmysqlclient; arp-scan backs the MAC fallback;
-# at/atd run the 30-minute upload retries.
+# python3-mysqldb/python3-requests are the system builds of requirements.txt;
+# arp-scan backs the MAC fallback; at/atd run the 30-minute upload retries.
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3 python3-venv python3-dev build-essential pkg-config \
-    default-libmysqlclient-dev arp-scan at cron
+    python3 python3-mysqldb python3-requests arp-scan at cron
 
 systemctl enable --now atd
 systemctl enable --now cron
-
-echo "==> Creating virtualenv in $VENV"
-sudo -u "$OWNER" python3 -m venv "$VENV"
-sudo -u "$OWNER" "$VENV/bin/pip" install --upgrade pip
-sudo -u "$OWNER" "$VENV/bin/pip" install -r "$APP_DIR/requirements.txt"
 
 if [ ! -f "$APP_DIR/config.conf" ]; then
     sudo -u "$OWNER" cp "$APP_DIR/config.conf.example" "$APP_DIR/config.conf"
@@ -56,9 +50,9 @@ MAILTO=""
 
 # --sync exports TODAY, so this runs in the evening once trading has closed.
 # To backfill a missed day, run main.py --date YYYY-MM-DD.
-0 23 * * *	root	$VENV/bin/python $APP_DIR/main.py --config $APP_DIR/config.conf --sync
+0 23 * * *	root	cd $APP_DIR && python3 main.py --sync
 EOF
 chmod 644 "$CRON_FILE"  # cron ignores group/other-writable files
 
 echo "==> Done. Cron: every day at 23:00 -> main.py --sync"
-echo "    Test it now with: sudo $VENV/bin/python $APP_DIR/main.py --sync"
+echo "    Test it now with: cd $APP_DIR && sudo python3 main.py --sync"

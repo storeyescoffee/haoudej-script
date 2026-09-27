@@ -14,8 +14,7 @@ sudo ./install.sh
 
 `install.sh`:
 
-- installs the system packages (Python build deps, `libmysqlclient`, `arp-scan`, `at`, `cron`)
-- creates a virtualenv in `.venv` and installs `requirements.txt` into it
+- installs the system packages (`python3`, `python3-mysqldb`, `python3-requests`, `arp-scan`, `at`, `cron`)
 - copies `config.conf.example` to `config.conf` if it doesn't exist
 - writes `/etc/cron.d/caisse`, which runs `main.py --sync` every day at 23:00
 
@@ -27,7 +26,7 @@ Edit `config.conf` with the database credentials and API settings; see the
 comments in `config.conf.example`. Then run once by hand to check it works:
 
 ```sh
-sudo .venv/bin/python main.py --sync
+sudo python3 main.py --sync
 ```
 
 Logs go to `logs/YYYY-MM-DD.log`.
@@ -35,11 +34,11 @@ Logs go to `logs/YYYY-MM-DD.log`.
 ## Usage
 
 ```sh
-.venv/bin/python main.py --sync              # export + upload today (what cron runs)
-.venv/bin/python main.py --date 2026-07-01   # a specific day
-.venv/bin/python main.py --reconcile [N]     # each of the last N days (default 30)
-.venv/bin/python main.py --upload            # re-send the existing results.csv
-.venv/bin/python main.py --resolve-mac       # print the till's IP, found by MAC
+python3 main.py --sync              # export + upload today (what cron runs)
+python3 main.py --date 2026-07-01   # a specific day
+python3 main.py --reconcile [N]     # each of the last N days (default 30)
+python3 main.py --upload            # re-send the existing results.csv
+python3 main.py --resolve-mac       # print the till's IP, found by MAC
 ```
 
 If an upload fails, the script retries it every 30 minutes via `at` until it succeeds.

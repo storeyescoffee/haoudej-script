@@ -277,9 +277,23 @@ def resolve_ip_by_mac(mac: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # MySQL export
 # ---------------------------------------------------------------------------
+# MySQL client errors that mean the server could not be reached at all, as
+# opposed to bad credentials or a missing database: 2002 no socket, 2003 can't
+# connect, 2005 unknown host, 2013 lost connection during connect.
+_UNREACHABLE_ERRNOS = {2002, 2003, 2005, 2013}
+
+class DeviceOffline(Exception):
+    """The till's MySQL server could not be reached — the device is off or
+    not on the network."""
+
+def _is_unreachable(exc: MySQLdb.OperationalError) -> bool:
+    return bool(exc.args) and exc.args[0] in _UNREACHABLE_ERRNOS
+
 def connect_mysql(cfg: ConfigParser):
     """Connect to MySQL at [mysql] host; if that fails and [mysql] mac is set,
-    re-resolve the host by MAC and retry there."""
+    re-resolve the host by MAC and retry there. Raises DeviceOffline when the
+    till cannot be reached; other MySQL errors (bad password, unknown database)
+    are raised as-is."""
     global _resolved_host
 
     m        = cfg["mysql"]
@@ -299,20 +313,28 @@ def connect_mysql(cfg: ConfigParser):
     try:
         return MySQLdb.connect(host=host, **settings)
     except MySQLdb.OperationalError as exc:
+        log.debug("[mysql] %s:%d failed (%s)", host, port, exc)
         if not mac:
+            if _is_unreachable(exc):
+                raise DeviceOffline(
+                    f"device is offline (no answer from {host}:{port})") from exc
             raise
-        log.warning("[mysql] %s:%d unreachable (%s) — resolving by MAC %s",
-                    host, port, exc, mac)
+        log.warning("[mysql] %s:%d unreachable — resolving by MAC %s", host, port, mac)
 
     ip = resolve_ip_by_mac(mac)
     if not ip:
-        raise MySQLdb.OperationalError(
-            f"host {host} unreachable and MAC {mac} not found on the local subnet")
+        raise DeviceOffline(
+            f"device is offline (no answer from {host}:{port}, MAC {mac} not on the network)")
     if ip == host:
-        raise MySQLdb.OperationalError(
-            f"MAC {mac} still resolves to {host}, which is not accepting connections")
+        raise DeviceOffline(f"device is offline (no answer from {host}:{port})")
 
-    conn = MySQLdb.connect(host=ip, **settings)
+    try:
+        conn = MySQLdb.connect(host=ip, **settings)
+    except MySQLdb.OperationalError as exc:
+        if not _is_unreachable(exc):
+            raise
+        log.debug("[mysql] %s:%d unreachable (%s)", ip, port, exc)
+        raise DeviceOffline(f"device is offline (no answer from {ip}:{port})") from exc
     log.info("[mysql] connected via MAC fallback: %s -> %s", mac, ip)
     _resolved_host = ip
     return conn
@@ -450,6 +472,9 @@ def export_and_upload(cfg: ConfigParser, device_id: str, target_date: str,
     new to upload) queues a retry via schedule_at_retry."""
     try:
         rows = run_mysql_export(cfg, target_date)
+    except DeviceOffline as exc:
+        log.error("%s: %s", target_date, exc)
+        return False
     except Exception as exc:
         log.error("%s: export FAILED (%s)", target_date, exc)
         return False

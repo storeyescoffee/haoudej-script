@@ -4,8 +4,10 @@ main.py — Raspberry Pi (Pi 4/5) port of HaoudejProgram.
 
 Runs the MySQL sales query for a given day, writes results.csv, and POSTs it to
 the configured API endpoint. One-shot: it does its job and exits. Scheduling is
-cron's problem — `sudo ./install.sh` writes /etc/cron.d/caisse. Database
-credentials go in config.conf (copy config.conf.example).
+done from the admin panel (sty-software-manager writes /etc/cron.d/sty-schedule),
+and runs started that way report their log + exit code back through
+`$STY_MANAGER/main.py --report` (see _report_to_manager). Database credentials
+go in config.conf (copy config.conf.example).
 
   python3 main.py                   export+upload today
   python3 main.py --sync             identical to the above; explicit for cron
@@ -65,9 +67,13 @@ LOG_DIR        = DATA_DIR / "logs"            # one file per day: logs/YYYY-MM-D
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
+# This run's log, kept in memory so it can be reported to sty-software-manager
+# at exit (see _report_to_manager).
+_RUN_LOG = io.StringIO()
+
 def _setup_logging():
     fmt = "%(asctime)s  %(levelname)s  %(message)s"
-    handlers = [logging.StreamHandler(sys.stdout)]
+    handlers = [logging.StreamHandler(sys.stdout), logging.StreamHandler(_RUN_LOG)]
     # Each run is short-lived, so the file is picked once from the start date;
     # a run that crosses midnight keeps writing to the day it began on.
     try:
@@ -446,9 +452,13 @@ def schedule_at_retry(config_path: Path, delay_minutes: int = 30) -> bool:
     script = Path(__file__).resolve()
     cmd = (f"{shlex.quote(sys.executable)} {shlex.quote(str(script))} "
            f"--upload --config {shlex.quote(str(config_path.resolve()))}")
+    # `at` snapshots the environment into the job; drop the sty-software-manager
+    # variables so the retry doesn't report over this run's result.
+    env = {k: v for k, v in os.environ.items() if k not in STY_ENV_VARS}
     try:
         proc = subprocess.run(["at", "now", "+", str(delay_minutes), "minutes"],
-                              input=cmd, text=True, capture_output=True, timeout=10)
+                              input=cmd, text=True, capture_output=True, timeout=10,
+                              env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         log.error("could not run `at` to schedule an upload retry (%s) — "
                    "is the `at` package installed? sudo apt install at && "
@@ -580,5 +590,49 @@ def main():
     sys.exit(0 if export_and_upload(cfg, device_id, target, config_path=args.config) else 1)
 
 
+# ---------------------------------------------------------------------------
+# Reporting to sty-software-manager
+# ---------------------------------------------------------------------------
+# When started by sty-software-manager (the panel's Run button, or a schedule's
+# /etc/cron.d/sty-schedule line), these say which Command this run is and where
+# the manager lives. A manual run has neither and simply doesn't report.
+STY_ENV_VARS = ("STY_COMMAND_ID", "STY_MANAGER")
+
+def _report_to_manager(exit_code: int) -> None:
+    """Send this run's log and exit code to the admin panel via
+    `sty-software-manager/main.py --report`. The ON_DEMAND / CRON / SCHEDULED
+    flag is already on the Command. Failure is only logged — it never changes
+    the run's own exit code."""
+    command_id = os.environ.get("STY_COMMAND_ID", "").strip()
+    manager_dir = os.environ.get("STY_MANAGER", "").strip()
+    if not command_id or not manager_dir:
+        return
+    manager = os.path.join(manager_dir, "main.py")
+    try:
+        proc = subprocess.run(
+            [sys.executable, manager, "--report",
+             "--command-id", command_id, "--exit-code", str(exit_code)],
+            input=_RUN_LOG.getvalue(), text=True, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.error("could not report to sty-software-manager (%s)", exc)
+        return
+    # The manager logs its own errors to stderr and always exits 0.
+    if proc.stderr.strip():
+        log.error("sty-software-manager report: %s", proc.stderr.strip())
+
+def _run_and_report() -> None:
+    try:
+        main()
+        exit_code = 0
+    except SystemExit as exc:
+        code = exc.code
+        exit_code = code if isinstance(code, int) else (0 if code is None else 1)
+    except Exception:
+        log.exception("unhandled error")
+        exit_code = 1
+    _report_to_manager(exit_code)
+    sys.exit(exit_code)
+
+
 if __name__ == "__main__":
-    main()
+    _run_and_report()
